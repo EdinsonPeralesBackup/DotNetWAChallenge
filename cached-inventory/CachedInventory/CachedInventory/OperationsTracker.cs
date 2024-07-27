@@ -1,103 +1,58 @@
-  namespace CachedInventory;
+namespace CachedInventory;
 
-  using System.Text.Json;
+using System.Linq;
+using System.Threading.Tasks;
+using Microsoft.EntityFrameworkCore;
 
-  public interface IOperationsTracker
-  {
-    Task<int[]> GetActionsByProductId(int productId);
-    Task<string> CreateOperationsTracker(DateTime time, int productId,int action);
-    Task FailUpdateByProductId(int productId);
-    Task FailUpdateByOperationId(string operationId);
-    Task RemoveCache();
-  }
-  public class OperationsTracker : IOperationsTracker
-  {
-    private static readonly string FileName = "operations-tracker.json";
-    private class Operation
-    {
-        public required string Id { get; set; }
-        public DateTime Time { get; set; }
-        public bool Ok { get; set; } = true;
-        public int ProductId { get; set; }
-        public int Action { get; set; }
-        public bool InCache { get;set; } = true;
-    }
-    public async Task<int[]> GetActionsByProductId(int productId)
-    {
-      try
-        {
-          var operations = await ReadOperationsFromFile();
-          return operations
+public interface IOperationsTracker
+{
+  Task<int[]> GetActionsByProductId(int productId);
+  Task<int> CreateOperationsTracker(int productId,int action);
+  Task FailUpdateByOperationId(int operationId);
+  Task RemoveCache();
+}
+public class OperationsTracker : IOperationsTracker
+{
+  private readonly ApplicationDbContext context;
+  public OperationsTracker(ApplicationDbContext context) => this.context = context;
+
+  public async Task<int[]> GetActionsByProductId(int productId) => await context.OperationTracker
               .Where(op => op.ProductId == productId && op.Ok && op.InCache)
               .Select(op => op.Action)
-              .ToArray();
-        }
-        catch
-        {
-            return Array.Empty<int>();
-        }
-    }
+              .ToArrayAsync();
 
-    public async Task<string> CreateOperationsTracker(DateTime time, int productId, int action)
+  public async Task<int> CreateOperationsTracker(int productId, int action)
+  {
+    var newOperation = new Operation
     {
-        var operations = await ReadOperationsFromFile();
-        var newOperation = new Operation
-        {
-            Id = Guid.NewGuid().ToString(),
-            Time = time,
-            ProductId = productId,
-            Action = action
-        };
-        operations.Add(newOperation);
-        await WriteOperationsToFile(operations);
-        return newOperation.Id;
-    }
+        ProductId = productId,
+        Action = action
+    };
+    context.OperationTracker.Add(newOperation);
+    await context.SaveChangesAsync();
+    return newOperation.Id;
+  }
+  public async Task FailUpdateByOperationId(int operationId)
+  {
+    var operation = await context.OperationTracker
+        .FirstOrDefaultAsync(op => op.Id == operationId);
 
-    public async Task FailUpdateByProductId(int productId)
+    if (operation != null)
     {
-        var operations = await ReadOperationsFromFile();
-        foreach (var operation in operations.Where(op => op.ProductId == productId))
-        {
-            operation.Ok = false;
-        }
-        await WriteOperationsToFile(operations);
-    }
-
-    public async Task FailUpdateByOperationId(string operationId)
-    {
-        var operations = await ReadOperationsFromFile();
-        var targetOperation = operations.FirstOrDefault(op => op.Id == operationId);
-        if (targetOperation != null)
-        {
-          targetOperation.Ok = false;
-          await WriteOperationsToFile(operations);
-        }
-    }
-
-    public async Task RemoveCache()
-    {
-        var operations = await ReadOperationsFromFile();
-        foreach (var operation in operations)
-        {
-            operation.InCache = false;
-        }
-        await WriteOperationsToFile(operations);
-    }
-
-    private async Task<List<Operation>> ReadOperationsFromFile()
-    {
-        if (!File.Exists(FileName))
-        {
-            return new List<Operation>();
-        }
-
-        var json = await File.ReadAllTextAsync(FileName);
-        return JsonSerializer.Deserialize<List<Operation>>(json) ?? new List<Operation>();
-    }
-
-    private async Task WriteOperationsToFile(List<Operation> operations)
-    {
-        var json = JsonSerializer.Serialize(operations, new JsonSerializerOptions { WriteIndented = true });
-        await File.WriteAllTextAsync(FileName, json);
+        operation.Ok = false;
+        await context.SaveChangesAsync();
     }
   }
+
+  public async Task RemoveCache()
+  {
+    var operations = await context.OperationTracker.ToListAsync();
+
+    foreach (var operation in operations)
+    {
+        operation.InCache = false;
+    }
+
+    await context.SaveChangesAsync();
+  }
+}

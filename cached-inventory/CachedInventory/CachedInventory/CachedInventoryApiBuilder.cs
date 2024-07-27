@@ -2,6 +2,7 @@ namespace CachedInventory;
 
 using System.Collections.Concurrent;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 
 public class ProductCacheItem
@@ -20,7 +21,9 @@ public static class CachedInventoryApiBuilder
     // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
     builder.Services.AddEndpointsApiExplorer();
     builder.Services.AddSwaggerGen();
+    builder.Services.AddDbContext<ApplicationDbContext>(opciones => opciones.UseSqlServer("name=DefaultConnection"));
     builder.Services.AddScoped<IWarehouseStockSystemClient, WarehouseStockSystemClient>();
+    builder.Services.AddScoped<IOperationsTracker, OperationsTracker>();
     builder.Services.AddScoped<IOperationsTracker, OperationsTracker>();
     builder.Services.AddMemoryCache();
 
@@ -57,7 +60,7 @@ public static class CachedInventoryApiBuilder
           {
             return Results.BadRequest("Not enough stock.");
           }
-          var operationId = await tracker.CreateOperationsTracker(DateTime.UtcNow, req.ProductId, -req.Amount);
+          var operationId = await tracker.CreateOperationsTracker(req.ProductId, -req.Amount);
           _ = Task.Run(async () =>
           {
             try
@@ -86,7 +89,7 @@ public static class CachedInventoryApiBuilder
           // await client.UpdateStock(req.ProductId, req.Amount + stock);
           // return Results.Ok();
           var stock = await GetStockWithCache(client, tracker, req.ProductId);
-          var operationId = await tracker.CreateOperationsTracker(DateTime.UtcNow, req.ProductId, req.Amount);
+          var operationId = await tracker.CreateOperationsTracker(req.ProductId, req.Amount);
           _ = Task.Run(async () =>
           {
             try
