@@ -13,6 +13,7 @@ public static class CachedInventoryApiBuilder
     builder.Services.AddEndpointsApiExplorer();
     builder.Services.AddSwaggerGen();
     builder.Services.AddScoped<IWarehouseStockSystemClient, WarehouseStockSystemClient>();
+    builder.Services.AddScoped<ICache, Cache>();
 
     var app = builder.Build();
 
@@ -27,21 +28,23 @@ public static class CachedInventoryApiBuilder
 
     app.MapGet(
         "/stock/{productId:int}",
-        async ([FromServices] IWarehouseStockSystemClient client, int productId) => await client.GetStock(productId))
+        async ([FromServices] IWarehouseStockSystemClient client, [FromServices] ICache cache, int productId) =>
+          await GetStockWithCache(client,cache,productId))
       .WithName("GetStock")
       .WithOpenApi();
 
     app.MapPost(
         "/stock/retrieve",
-        async ([FromServices] IWarehouseStockSystemClient client, [FromBody] RetrieveStockRequest req) =>
+        async ([FromServices] IWarehouseStockSystemClient client,[FromServices] ICache cache ,[FromBody] RetrieveStockRequest req) =>
         {
-          var stock = await client.GetStock(req.ProductId);
+          var stock = await GetStockWithCache(client,cache,req.ProductId);
           if (stock < req.Amount)
           {
             return Results.BadRequest("Not enough stock.");
           }
 
-          await client.UpdateStock(req.ProductId, stock - req.Amount);
+          _=Task.Run(() => client.UpdateStock(req.ProductId, stock - req.Amount));
+          cache.AddOrUpdateStock(req.ProductId,stock-req.Amount);
           return Results.Ok();
         })
       .WithName("RetrieveStock")
@@ -50,16 +53,32 @@ public static class CachedInventoryApiBuilder
 
     app.MapPost(
         "/stock/restock",
-        async ([FromServices] IWarehouseStockSystemClient client, [FromBody] RestockRequest req) =>
+        async ([FromServices] IWarehouseStockSystemClient client,[FromServices] ICache cache,[FromBody] RestockRequest req) =>
         {
-          var stock = await client.GetStock(req.ProductId);
-          await client.UpdateStock(req.ProductId, req.Amount + stock);
+          var stock = await GetStockWithCache(client,cache,req.ProductId);
+          _= Task.Run(() => client.UpdateStock(req.ProductId, req.Amount + stock));
           return Results.Ok();
         })
       .WithName("Restock")
       .WithOpenApi();
 
     return app;
+  }
+  public static async Task<int> GetStockWithCache(
+  IWarehouseStockSystemClient client,
+  ICache cache,
+  int productId)
+  {
+    if (cache.InCache(productId))
+    {
+      return cache.GetStock(productId);
+    }
+    else
+    {
+      var stock = await client.GetStock(productId);
+      cache.AddOrUpdateStock(productId,stock);
+      return stock;
+    }
   }
 }
 
